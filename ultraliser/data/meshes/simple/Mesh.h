@@ -541,7 +541,12 @@ public:
      */
     void smoothSurface(size_t numIterations);
 
-
+    /**
+     * @brief Mesh simplification using edge collapse. One vertex per iteration is collapsed,
+     * until either the number of iterations is completed or no further edges can be collapsed.
+     * @param numIterations Number of collapsing iterations to apply.
+     */
+    void collapseEdges(size_t numIterations);
 
     /**
      * @brief scaleAndTranslateGeneratedMesh
