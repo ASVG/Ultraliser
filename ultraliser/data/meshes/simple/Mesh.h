@@ -578,6 +578,13 @@ public:
 private:
 
     /**
+     * @brief INitializes the mesh from a list of vertices and a list of triangles
+     * @param vertices Mesh vertices
+     * @param triangles Mesh triangles
+     */
+    void _initFromVertexAndTriangleList(Vertices vertices, Triangles triangles);
+
+    /**
      * @brief _releaseData
      * Releases the data of the mesh.
      */

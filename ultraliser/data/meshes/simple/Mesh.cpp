@@ -31,458 +31,6 @@
 #include <math/Math.h>
 #include <utilities/Utilities.h>
 
-namespace
-{
-class FaceNormalGenerator
-{
-public:
-    static Ultraliser::Vector3f generate(
-        const Ultraliser::Vec3i_64 &triangle, 
-        const Ultraliser::Vertex *vertices)
-    {
-        auto &v1 = vertices[triangle.x()];
-        auto &v2 = vertices[triangle.y()];
-        auto &v3 = vertices[triangle.z()];
-        return Ultraliser::computeNormal(v1, v2, v3);
-    }
-};
-
-struct CollapseTriangle
-{
-    size_t index = 0;
-    std::unordered_set<size_t> indices;
-    Ultraliser::Vector3f normal;
-    bool collapsed = false;
-
-    CollapseTriangle(
-        size_t index, 
-        const Ultraliser::Vec3i_64 &indices, 
-        const Ultraliser::Vector3f &normal)
-        : index(index)
-        , normal(normal)
-    {
-        this->indices.insert(indices.x());
-        this->indices.insert(indices.y());
-        this->indices.insert(indices.z());
-    }
-
-    bool containsVertex(size_t vertex)
-    {
-        return indices.find(vertex) != indices.end();
-    }
-
-    void replaceVertex(size_t oldIndex, size_t newIndex)
-    {
-        auto removed = indices.erase(oldIndex);
-        assert(removed == 1);
-        indices.insert(newIndex);
-    }
-
-    void collapse()
-    {
-        collapsed = true;
-    }
-};
-
-class CollapseTriangleFactory
-{
-public:
-    static std::vector<CollapseTriangle> create(const Ultraliser::Mesh &mesh)
-    {
-        auto vertices = mesh.getVertices();
-        auto triangles = mesh.getTriangles();
-        auto triangleCount = mesh.getNumberTriangles();
-
-        auto result = std::vector<CollapseTriangle>();
-        result.reserve(triangleCount);
-
-        for(size_t i = 0; i < triangleCount; ++i)
-        {
-            auto normal = FaceNormalGenerator::generate(triangles[i], vertices);
-            result.emplace_back(i, triangles[i], normal);
-        }
-
-        return result;
-    }
-};
-
-class VertexTrianglesFinder
-{
-public:
-    static std::unordered_set<size_t> find(
-        size_t vertexIndex, 
-        const Ultraliser::Triangle* triangles, 
-        size_t triangleCount)
-    {
-        auto result = std::unordered_set<size_t>();
-        for(size_t i = 0; i < triangleCount; ++i)
-        {
-            if(!_triangleContainsVertex(triangles[i], vertexIndex))
-            {
-                continue;
-            }
-            result.insert(i);
-        }
-        return result;
-    }
-private:
-    static bool _triangleContainsVertex(const Ultraliser::Vec3i_64 &triangle, size_t vertexIndex)
-    {
-        for(size_t i = 0; i < 3; ++i)
-        {
-            if(triangle[i] == vertexIndex)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-};
-
-class VertexNeighoursFinder
-{
-public:
-    static std::unordered_set<size_t> find(
-        size_t vertexIndex, 
-        const Ultraliser::Triangle *triangles, 
-        const std::unordered_set<size_t> &vertexTriangles)
-    {
-        auto result = std::unordered_set<size_t>();
-        for(auto vertexTriangle : vertexTriangles)
-        {
-            auto &triangle = triangles[vertexTriangle];
-            for(size_t i = 0; i < 3; ++i)
-            {
-                if(triangle[i] == vertexIndex)
-                {
-                    continue;
-                }
-                result.insert(i);
-            }
-        }
-        return result;
-    }
-};
-
-struct CollapseVertex
-{
-    size_t index = 0;
-    Ultraliser::Vector3f position;
-    std::unordered_set<size_t> triangles;
-    std::unordered_set<size_t> neighbourVertices;
-    bool collapsed = false;
-
-    bool containsNeighbour(size_t index)
-    {
-        return neighbourVertices.find(index) != neighbourVertices.end();
-    }
-
-    void removeNeighbour(size_t index)
-    {
-        neighbourVertices.erase(index);
-    }
-
-    void addTriangle(size_t index)
-    {
-        auto added = triangles.insert(index);
-        assert(added.second);
-    }
-
-    void removeTriangle(size_t index)
-    {
-        auto removed = triangles.erase(index);
-        assert(removed == 1);
-    }
-
-    void collapse()
-    {
-        collapsed = true;
-    }
-};
-
-class CollapseVertexFactory
-{
-public:
-    static std::vector<CollapseVertex> create(const Ultraliser::Mesh &mesh)
-    {
-        auto vertices = mesh.getVertices();
-        auto vertexCount = mesh.getNumberVertices();
-        auto triangles = mesh.getTriangles();
-        auto triangleCount = mesh.getNumberTriangles();
-
-        auto result = std::vector<CollapseVertex>();
-        result.reserve(vertexCount);
-
-        for(size_t i = 0; i < vertexCount; ++i)
-        {
-            auto vertexTriangles = VertexTrianglesFinder::find(i, triangles, triangleCount);
-            auto vertexNeighbour = VertexNeighoursFinder::find(i, triangles, vertexTriangles);
-            result.push_back({i, vertices[i], std::move(vertexTriangles), std::move(vertexNeighbour)});
-        }
-
-        return result;
-    }
-};
-
-struct CollapseInfo
-{
-    float cost = std::numeric_limits<float>::max();
-    size_t vertex = std::numeric_limits<size_t>::max();
-};
-
-class CollapseMesh
-{
-public:
-    CollapseMesh(Ultraliser::Mesh &mesh)
-     : _triangles(CollapseTriangleFactory::create(mesh))
-     , _vertices(CollapseVertexFactory::create(mesh))
-     , _vertexCollapseInfo(_vertices.size())
-    {
-        _updateCollapseCost();
-    }
-
-    bool collapseEdge()
-    {
-        if(_vertices.empty())
-        {
-            return false;
-        }
-
-        auto cheapestVertexIndex = _findMinimumCostEdge();
-        _collapseVertex(_vertices[cheapestVertexIndex]);
-        return true;
-    }
-
-private:
-    void _updateCollapseCost()
-    {
-        for(size_t i = 0; i < _vertices.size(); ++i)
-        {
-            _updateVertexCollapseCost(i);    
-        }
-    }
-
-    void _updateVertexCollapseCost(size_t index)
-    {
-        auto &vertex = _vertices[index];
-        auto &collapseInfo = _vertexCollapseInfo[index];
-
-        if(vertex.neighbourVertices.empty())
-        {
-            collapseInfo.cost = -0.01f;
-            collapseInfo.vertex = ;
-            return;
-        }
-
-        auto cost = std::numeric_limits<float>::max();
-        auto collapseVertex = std::numeric_limits<size_t>::max();
-
-        for(auto neighbour : vertex.neighbourVertices)
-        {
-            auto edgeCost = _computeEdgeCost(index, neighbour);
-            if(edgeCost < cost)
-            {
-                cost = edgeCost;
-                collapseVertex = neighbour;
-            }
-        }
-        collapseInfo.vertex = collapseVertex;
-        collapseInfo.cost = cost;
-    }
-
-    float _computeEdgeCost(size_t index, size_t neighbourIndex)
-    {
-        auto &u = _vertices[index];
-        auto &v = _vertices[neighbourIndex];
-
-        auto edgeLen = (u.position - v.position).abs();
-        auto sides = _findEdgeTriangles(u, v);
-        auto curvature = _findMaxCurvature(u, sides);
-        return edgeLen * curvature;
-    }
-
-    std::vector<size_t> _findEdgeTriangles(const CollapseVertex &u, const CollapseVertex &v)
-    {
-        auto result = std::vector<size_t>();
-        for(auto triangleIndex : u.triangles)
-        {
-            auto &triangle = _triangles[triangleIndex];
-            if(!triangle.containsVertex(v.index))
-            {
-                continue;
-            }
-            result.push_back(triangleIndex);
-        }
-        return result;
-    }
-
-    float _findMaxCurvature(const CollapseVertex &u, const std::vector<size_t> &sides)
-    {
-        auto curvature = 0.f;
-        for(auto triangleIndex : u.triangles)
-        {
-            auto localCurvature = 1.f;
-            auto &normal = _triangles[triangleIndex].normal;
-
-            for(auto sideTriangleIndex : sides)
-            {    
-                auto &sideNormal = _triangles[sideTriangleIndex].normal;
-                auto dot = Ultraliser::Vector3f::dot(normal, sideNormal);
-                localCurvature = std::min(localCurvature, (1.f - dot) * 0.5f);
-            }
-            curvature = std::max(curvature, localCurvature);
-        }
-        return curvature;
-    }
-
-    size_t _findMinimumCostEdge()
-    {
-        size_t minimum = 0;
-        for(size_t i = 1; i < _vertexCollapseInfo.size(); ++i)
-        {
-            if(_vertexCollapseInfo[i].cost < _vertexCollapseInfo[minimum].cost)
-            {
-                minimum = i;
-            }
-        }
-        return minimum;
-    }
-
-    void _collapseVertex(CollapseVertex &u)
-    {
-        auto &collapseInfo = _vertexCollapseInfo[u.index];
-        auto &v = _vertices[collapseInfo.collapseVertex];
-        if(v.collapsed)
-        {
-            _destroyVertex(u);
-            return;
-        }
-
-        // make tmp a list of all the neighbors of u
-        auto tempNeighbours = u.neighbourVertices;
-
-        // delete triangles on edge uv
-        for(auto triangleIndex : u.triangles)
-        {
-            auto &triangle = _triangles[triangleIndex];
-            if(triangle.containsVertex(v.index))
-            {
-                _destroyTriangle(triangle);
-            }
-        }
-
-        // update remaining triangles to have v instead of u
-        for(auto triangleIndex : v.triangles)
-        {
-            auto &triangle = _triangles[triangleIndex];
-            if(triangle.collapsed)
-            {
-                continue;
-            }
-            _replaceVertex(triangle, u, v);
-        }
-
-        _destroyVertex(u);
-
-        for(auto neighbour : tempNeighbours)
-        {
-            _updateVertexCollapseCost(neighbour);
-        }
-        
-    }
-
-    void _replaceVertex(CollapseTriangle &triangle, CollapseVertex &old, CollapseVertex &neww)
-    {
-        triangle.replaceVertex(old.index, neww.index);
-        old.removeTriangle(triangle.index);
-        neww.addTriangle(triangle.index);
-        _removeTriangleVerticesFromNeighbourhood(old, triangle);
-    }
-
-    void _removeTriangleVerticesFromNeighbourhood(CollapseVertex &vertex, CollapseTriangle &triangle)
-    {
-        for(auto vertexIndex : triangle.indices)
-        {
-            auto &anotherVertex = _vertices[vertexIndex];
-            _removeIfNotNeighbour(vertex, anotherVertex);
-            _removeIfNotNeighbour(anotherVertex, vertex);
-        }
-    }
-
-
-    void _destroyVertex(CollapseVertex &vertex)
-    {
-        for(auto neighbourIndex : vertex.neighbourVertices)
-        {
-            auto &neighbour = _vertices[neighbourIndex];
-            neighbour.removeNeighbour(vertex.index);
-        }
-
-        vertex.collapse();
-    }
-
-    void _destroyTriangle(CollapseTriangle &triangle)
-    {
-        for(auto vertexIndex : triangle.indices)
-        {
-            auto &vertex = _vertices[vertexIndex];
-            if(vertex.collapsed)
-            {
-                continue;
-            }
-            vertex.removeTriangle(triangle.index);
-        }
-        
-        for(auto vertexIndex : triangle.indices)
-        {
-            auto &v1 = _vertices[vertexIndex];
-            if(v1.collapsed)
-            {
-                continue;
-            }
-            for(auto vertexIndex2 : triangle.indices)
-            {
-                v1.removeNeighbour(vertexIndex2);
-            }
-        }
-        triangle.collapse();
-    }
-
-    bool _isVertexInNeighbourhood(CollapseVertex &vertex, CollapseVertex &testVertex)
-    {
-        for(auto triangleIndex : vertex.triangles)
-        {
-            auto &triangle = _triangles[triangleIndex];
-            if(triangle.containsVertex(testVertex.index))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void _removeIfNotNeighbour(CollapseVertex &vertex, CollapseVertex &neighbour)
-    {
-        if(!vertex.containsNeighbour(neighbour.index))
-        {
-            return;
-        }
-
-        if(!_isVertexInNeighbourhood(vertex, neighbour))
-        {
-            return;
-        }
-
-        vertex.removeNeighbour(neighbour.index);
-    }
-
-private:
-    std::vector<CollapseTriangle> _triangles;
-    std::vector<CollapseVertex> _vertices;
-    std::vector<CollapseInfo> _vertexCollapseInfo;
-};
-}
-
 #define ANGLE_ERROR 0.123456789f
 
 #define MAXIMUM_FLOAT_VALUE  99999.f
@@ -541,29 +89,7 @@ Mesh::Mesh(const Samples& samples, const size_t& bevelSides)
 
 Mesh::Mesh(Vertices vertices, Triangles triangles)
 {
-    _numberVertices = vertices.size();
-    _numberTriangles = triangles.size();
-    _optimizationTime = 0.0;
-
-    this->_vertices = new Vertex[_numberVertices];
-    this->_triangles = new Triangle[_numberTriangles];
-
-    const Vertex* vertexData = vertices.data();
-    const Triangle* triangleData = triangles.data();
-
-
-    for (size_t i = 0; i < _numberVertices; ++i)
-    {
-        this->_vertices[i] = vertexData[i];
-    }
-
-    for (size_t i = 0; i < _numberTriangles; ++i)
-    {
-        this->_triangles[i] = triangleData[i];
-    }
-
-    _neighbors = nullptr;
-    _neighborList = nullptr;
+    _initFromVertexAndTriangleList(std::move(vertices), std::move(triangles));
 }
 
 Mesh::Mesh(const std::string &fileName, const bool& verbose)
@@ -910,6 +436,33 @@ size_t Mesh::getNumberTriangles() const
     return _numberTriangles;
 }
 
+void Mesh::_initFromVertexAndTriangleList(Vertices vertices, Triangles triangles)
+{
+    _numberVertices = vertices.size();
+    _numberTriangles = triangles.size();
+    _optimizationTime = 0.0;
+
+    this->_vertices = new Vertex[_numberVertices];
+    this->_triangles = new Triangle[_numberTriangles];
+
+    const Vertex* vertexData = vertices.data();
+    const Triangle* triangleData = triangles.data();
+
+
+    for (size_t i = 0; i < _numberVertices; ++i)
+    {
+        this->_vertices[i] = vertexData[i];
+    }
+
+    for (size_t i = 0; i < _numberTriangles; ++i)
+    {
+        this->_triangles[i] = triangleData[i];
+    }
+
+    _neighbors = nullptr;
+    _neighborList = nullptr;
+}
+
 float Mesh::_cotangentAngle(const Vector3f& pivot, const Vector3f& a, const Vector3f& b)
 {
     const auto pA = (a - pivot).normalized();
@@ -1181,16 +734,6 @@ void Mesh::smoothSurface(size_t numIterations)
 
     LOG_STATUS_IMPORTANT("Smoothing Operator Stats.");
     LOG_STATS(GET_TIME_SECONDS);
-}
-
-void Mesh::collapseEdges(size_t numIterations)
-{
-    auto collapseMesh = CollapseMesh(*this);
-    bool canCollapse = true;
-    for(size_t i = 0; i < numIterations && canCollapse; ++i)
-    {
-        canCollapse = collapseMesh.collapseEdge();
-    }
 }
 
 void Mesh::exportMesh(const std::string &prefix,
