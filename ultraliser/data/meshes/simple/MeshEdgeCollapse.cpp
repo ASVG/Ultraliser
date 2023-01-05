@@ -692,14 +692,35 @@ private:
         }
     }
 };
+
+class IterationsCalculator
+{
+public:
+    static size_t fromPercentage(const Ultraliser::Mesh &mesh, float percentage)
+    {
+        if(percentage <= 0.f)
+        {
+            throw std::invalid_argument("Cannot collapse the mesh to zero or negative percentage");
+        }
+
+        auto numVertices = mesh.getNumberVertices();
+        return static_cast<size_t>(static_cast<double>(percentage) * numVertices);
+    }
+};
 }
 
 namespace Ultraliser
 {
-void Mesh::collapseEdges(size_t numIterations)
+void Mesh::collapseEdges(float maxPercentage)
 {
+    if(maxPercentage >= 1.f)
+    {
+        return;
+    }
+
     TIMER_SET;
 
+    auto numIterations = IterationsCalculator::fromPercentage(*this, maxPercentage);
     auto collapseMesh = CollapseMeshData(*this);
     auto collapseCost = CollapseEdgeCostAlgorithm(collapseMesh);
     auto collapseAlgorithm = CollapseEdgeAlgorithm(collapseMesh);
@@ -708,6 +729,7 @@ void Mesh::collapseEdges(size_t numIterations)
     {
         if(collapseMesh.validVertexCount() == 0)
         {
+            LOG_STATUS("Stopped at ", i, " out of ", numIterations, " iterations");
             break;
         }
 
@@ -722,6 +744,6 @@ void Mesh::collapseEdges(size_t numIterations)
     _initFromVertexAndTriangleList(std::move(converter.vertices), std::move(converter.triangles));
 
     auto seconds = GET_TIME_SECONDS;
-    std::cout << numIterations << " edge-collapse iterations in " << seconds << std::endl;
+    LOG_STATUS("Time: ", numIterations, " edge-collapse iterations in ", seconds);
 }
 }

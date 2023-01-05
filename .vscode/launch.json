@@ -7,16 +7,11 @@
             "request": "launch",
             "program": "${command:cmake.buildDirectory}/bin/testEdgeCollapse",
             "args": [
-                "/home/nadir/Downloads/CA1-W-P13-watertight.obj",
-                "50"
+                "/home/nroman/Downloads/input_triangles.obj",
+                "/home/nroman/Downloads",
+                "0.5"
             ],
             "cwd": "${workspaceFolder}",
-            "environment": [
-                {
-                    "name": "LD_LIBRARY_PATH",
-                    "value": "$LD_LIBRAR_PATH:/home/nadir/Programs/Poco/lib:/home/nadir/Programs/OSPRAY_2_10/install_dir/lib"
-                }
-            ],
             "MIMode": "gdb",
             "setupCommands": [
                 {

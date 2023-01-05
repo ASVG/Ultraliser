@@ -543,10 +543,10 @@ public:
 
     /**
      * @brief Mesh simplification using edge collapse. One vertex per iteration is collapsed,
-     * until either the number of iterations is completed or no further edges can be collapsed.
-     * @param numIterations Number of collapsing iterations to apply.
+     * until either the requested percentage is satisfied or no further edges can be collapsed.
+     * @param vertexPercentage Maximum percentage of vertices to remove.
      */
-    void collapseEdges(size_t numIterations);
+    void collapseEdges(float vertexPercentage);
 
     /**
      * @brief scaleAndTranslateGeneratedMesh
