@@ -698,11 +698,7 @@ class IterationsCalculator
 public:
     static size_t fromPercentage(const Ultraliser::Mesh &mesh, float percentage)
     {
-        if(percentage <= 0.f)
-        {
-            throw std::invalid_argument("Cannot collapse the mesh to zero or negative percentage");
-        }
-
+        percentage = std::max(percentage, 1.f);
         auto numVertices = mesh.getNumberVertices();
         return static_cast<size_t>(static_cast<double>(percentage) * numVertices);
     }
@@ -713,7 +709,7 @@ namespace Ultraliser
 {
 void Mesh::collapseEdges(float maxPercentage)
 {
-    if(maxPercentage >= 1.f)
+    if(maxPercentage <= 0.f)
     {
         return;
     }
@@ -729,7 +725,6 @@ void Mesh::collapseEdges(float maxPercentage)
     {
         if(collapseMesh.validVertexCount() == 0)
         {
-            LOG_STATUS("Stopped at ", i, " out of ", numIterations, " iterations");
             break;
         }
 
